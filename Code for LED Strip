@@ -1,0 +1,46 @@
+#include <FastLED.h>
+
+#define NUM_LEDS 20
+#define LED_PIN1 7
+#define LED_PIN2 4
+
+
+CRGB led1[NUM_LEDS];
+CRGB led2[NUM_LEDS];
+
+
+
+void setup(){
+  FastLED.addLeds<WS2811, LED_PIN1, GRB>(led1, NUM_LEDS);
+  FastLED.addLeds<WS2811, LED_PIN2, GRB>(led2, NUM_LEDS);
+  FastLED.setBrightness(255);
+
+   /*for(int i = 0; i <= 14; i++){
+    led1[i] = CRGB::Lavender;
+    FastLED.show();
+  }*/
+
+  /* for(int i = 0; i <= 11; i++){
+    led2[i] = CRGB::Lavender;
+    FastLED.show();
+  }*/
+
+  for(int i = 0; i <= 19; i++){
+    led2[i] = CRGB::Lavender;
+    FastLED.show();
+  }
+
+}
+
+void loop(){
+ 
+  
+
+  /*delay(2000);
+  led[1] = CRGB::Black;
+  FastLED.show();
+  delay(2000);
+  led[0] = CRGB::Black;
+  FastLED.show();
+  delay(2000);*/
+}
