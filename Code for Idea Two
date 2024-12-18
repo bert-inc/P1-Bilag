@@ -1,0 +1,298 @@
+#include <Wire.h>
+#include <Zumo32U4.h>
+
+
+
+Zumo32U4Buzzer buzzer;
+Zumo32U4LineSensors lineSensors;
+Zumo32U4Motors motors;
+Zumo32U4ButtonA buttonA;
+Zumo32U4ButtonB buttonB;
+Zumo32U4ButtonC buttonC;
+Zumo32U4OLED display;
+Zumo32U4Encoders encoders;
+Zumo32U4IMU imu;
+Zumo32U4ProximitySensors proxSensors;
+
+
+#define NUM_SENSORS 5
+uint16_t lineSensorValues[NUM_SENSORS];
+
+int speed = 150;
+int threshold=1000;
+float wheelCirc = 13.0;
+
+
+uint16_t SensorMax[5] = {0, 0, 0, 0, 0};
+uint16_t SensorMin[5] = {2000, 2000, 2000, 2000, 2000};
+int SensorThreshold[5];
+bool ledOn = true;
+int LastTurn = 0; //NYT
+int Stage = 0;
+
+
+void setup() {
+  // put your setup code here, to run once:
+  proxSensors.initFrontSensor();
+  lineSensors.initFiveSensors();
+  Serial.begin(9600);
+  Kali();
+  delay(2000);
+}
+
+// Prints a line with all the sensor readings to the serial
+// monitor.
+void PrintReadingsToSerial(){
+  char buffer[80];
+  sprintf(buffer, "%4d %4d %4d %4d %4d \n",
+    lineSensorValues[0], // most left sensor 
+    lineSensorValues[1], // middel left sensor
+    lineSensorValues[2], // middel sensor
+    lineSensorValues[3], // middel right sensor
+    lineSensorValues[4]  // most right sensor
+  
+  );
+  Serial.print(buffer);
+}
+
+// the uncalibrated line sensor reading are between 0 (very bright) and 2000 (very dark)
+void readLineSensors(){
+  lineSensors.read(lineSensorValues, QTR_EMITTERS_ON);
+  PrintReadingsToSerial();
+  delay(20);
+}
+
+/*
+float GetDistance(){
+  int countsL = encoders.getCountsLeft();
+  int countsR = encoders.getCountsRight();
+
+  float distanceL = countsL/900.0 * wheelCirc;
+  float distanceR = countsR/900.0 * wheelCirc;
+
+  //Serial.println("Move my wheels.... counts L " + (String)countsL + " R " + (String)countsR);
+  //Serial.println("Move my wheels.... cm L " + (String)distanceL + " R " + (String)distanceR);
+
+  //delay(1000);
+  return (distanceL + distanceR)/2;
+}
+
+void ResetEncoders(){
+  encoders.getCountsAndResetLeft();
+  encoders.getCountsAndResetRight();
+}
+*/
+
+
+void TurnOnSpot(){
+  motors.setSpeeds(speed, -speed);
+}
+
+void PrintMaxToSerial(){
+  char buffer[80];
+  sprintf(buffer, "%4d %4d %4d %4d %4d \n", 
+    SensorMax[0], 
+    SensorMax[1],
+    SensorMax[2],
+    SensorMax[3],
+    SensorMax[4]
+    );
+    Serial.print(buffer);
+}
+
+void PrintMinToSerial(){
+  char buffer[80];
+  sprintf(buffer, "%4d %4d %4d %4d %4d \n", 
+    SensorMin[0], 
+    SensorMin[1],
+    SensorMin[2],
+    SensorMin[3],
+    SensorMin[4]
+    );
+    Serial.print(buffer);
+}
+void PrintSensorThreshold(){
+  //uint16_t SensorThreshold[5] ={(SensorMax[0]+SensorMin[0])/2, (SensorMax[1]+SensorMin[1])/2, (SensorMax[2]+SensorMin[2])/2, (SensorMax[3]+SensorMin[3])/2, (SensorMax[4]+SensorMin[4])/2};
+  char buffer[80];
+  sprintf(buffer, "%4d %4d %4d %4d %4d \n", 
+    SensorThreshold[0], 
+    SensorThreshold[1],
+    SensorThreshold[2],
+    SensorThreshold[3],
+    SensorThreshold[4]
+    );
+    Serial.print(buffer);
+    return SensorThreshold;
+}
+
+void Kali(){
+  //Serial.println("Calibrating");
+  delay(2000);
+  ledYellow(ledOn);
+  TurnOnSpot();
+  
+  for (int i = 0; i < 500; i++ ){
+    readLineSensors();
+    for (int j = 0; j < 5; j++){
+        if (lineSensorValues[j] > SensorMax[j]){
+            SensorMax[j] = lineSensorValues[j];
+        }
+
+        if (lineSensorValues[j] < SensorMin[j]){
+            SensorMin[j] = lineSensorValues[j];
+        }
+    } 
+  }
+  for (int i=0; i<5; i++){
+  SensorThreshold[i] = (SensorMax[i]+SensorMin[i])/2;
+  ledYellow(!ledOn);
+  }
+  PrintMinToSerial();
+  PrintMaxToSerial();
+  PrintSensorThreshold();
+  //Serial.print(SensorThreshold[5]);
+  Bip();
+  ledGreen(ledOn);
+  Stop();
+  //delay(5000);
+}
+
+void Bip(){
+  buzzer.playNote(NOTE_A(4),100,15);
+}
+
+void RedBlink(){
+  ledRed(ledOn);
+  Bip();
+  delay(100);
+  ledRed(!ledOn);
+  delay(200);
+  ledRed(ledOn);
+  Bip();
+  delay(100);
+  ledRed(!ledOn);
+  delay(200);
+}
+
+
+void Stop(){
+  motors.setSpeeds(0,0);
+  ledRed(!ledOn);
+  ledYellow(!ledOn);  
+}
+
+void Forward(){
+  motors.setSpeeds(speed, speed);
+  ledRed(!ledOn);
+  ledYellow(!ledOn);
+}
+
+void TurnRight(){
+  ledRed(ledOn);
+  ledYellow(!ledOn);
+  motors.setSpeeds(1.1*speed, -0.5*speed);
+  
+  LastTurn = 1; //NYT
+}
+
+void SoftTurnRight(){
+  ledRed(ledOn);
+  ledYellow(!ledOn);
+  motors.setSpeeds(speed, speed/2);
+  
+}
+
+void TurnLeft(){
+  ledYellow(ledOn);
+  motors.setSpeeds(-0.5*speed, 1.1*speed);
+  ledRed(!ledOn);
+  LastTurn = 2; //NYT
+}
+
+void SoftTurnLeft(){
+  ledYellow(ledOn);
+  ledRed(!ledOn);
+  motors.setSpeeds(speed/2, speed);
+  
+}
+
+/////////
+// 1 = højre
+// 2 = venstre 
+
+
+/*
+if (lineSensorValues[2] < SensorThreshold[2] && int LastTurn == 1){
+  SoftTurnRight();
+}
+
+if (lineSensorValues[2] < SensorThreshold[2] && int LastTurn == 2){
+  SoftTurnLeft()
+}
+*/
+/////////
+void LineFollow(){
+  readLineSensors();
+  Forward();
+  if (lineSensorValues[0] > SensorThreshold[0]){
+  TurnLeft();
+  delay(100);
+  }
+
+  else if (lineSensorValues[4] > SensorThreshold[4]){
+  TurnRight();
+  delay(100);
+  }
+
+  else if (lineSensorValues[3] > SensorThreshold[3]){
+  SoftTurnRight();
+  //delay(100);
+  }
+
+  else if (lineSensorValues[1] > SensorThreshold[1]){
+  SoftTurnLeft();
+  }
+
+  else if (lineSensorValues[2] < SensorThreshold[2] && LastTurn == 1){ //NYT
+  TurnRight();                   
+  }
+
+  else if (lineSensorValues[2] < SensorThreshold[2] && LastTurn == 2){
+  TurnLeft();  //NYT
+  }
+}
+
+
+
+void loop() {  
+  proxSensors.read();
+  if (proxSensors.countsFrontWithLeftLeds() > 5){
+    Stop();
+    RedBlink();
+    //Bip();
+    //delay(200);
+    //Bip();
+    delay(2000);
+  }
+  else {
+    readLineSensors();
+    switch(Stage){
+      case 0:
+        //Serial.print("I ran");
+        
+        if(buttonA.isPressed()){
+          ledGreen(!ledOn);
+          delay(1500);
+          Stage = 1;
+        buttonA.waitForRelease();
+        }
+        break;
+      case 1:
+        //Serial.print("Koer!");
+        LineFollow();
+        break;
+    }
+    
+  }
+
+}
