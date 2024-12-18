@@ -1,0 +1,513 @@
+#include <Wire.h>
+#include <Zumo32U4.h>
+
+Zumo32U4OLED display;
+Zumo32U4IMU imu;
+Zumo32U4ButtonA buttonA;
+Zumo32U4Motors motors;
+Zumo32U4Encoders encoders;
+Zumo32U4ButtonB buttonB;
+Zumo32U4ButtonC buttonC;
+Zumo32U4LineSensors lineSensors;
+
+unsigned int lineSensorValues[3];
+#define THRESHOLD 400
+
+// Grid dimensions
+const int ROWS = 7;
+const int COLS = 7;
+
+// Start and end positions
+const int startCol = 5, startRow = 5; // Start position
+const int endCol = 3, endRow = 5;     // End position
+
+/*
+ Rooms:
+ __________
+ |  |  |  |
+ |A_|  |B_|
+ | _  _  _|
+ |C_|D_|E_|
+
+  A = Col 5 Row 2
+  B = Col 1 Row 2
+  C = Col 5 Row 5
+  D = Col 3 Row 5
+  E = Col 1 Row 5
+  
+*/
+
+// Grid representation (0 = walkable, 1 = obstacle)
+int grid[ROWS][COLS] = {
+  {1, 1, 1, 1, 1, 1, 1},
+  {1, 0, 0, 0, 0, 0, 1},
+  {1, 0, 1, 0, 1, 0, 1},
+  {1, 1, 1, 0, 1, 1, 1},
+  {1, 0, 0, 0, 0, 0, 1},
+  {1, 0, 1, 0, 1, 0, 1},
+  {1, 1, 1, 1, 1, 1, 1}
+};
+int globArr[ROWS*COLS];
+
+// Node structure
+struct Node {
+  int x, y;
+  int g, h, f;
+  Node* parent;
+};
+
+
+
+// Open and closed lists
+Node* openList[ROWS * COLS];
+int openListSize = 0;
+Node* closedList[ROWS * COLS];
+int closedListSize = 0;
+int count = 0;
+String pathString = "";
+String howdi = "";
+
+uint32_t turnAngle = 0;
+int16_t turnRate;
+int16_t gyroOffset;
+uint16_t gyroLastUpdate = 0;
+int speed = 100;
+int extraGyro = 0.5;
+
+
+struct {             // Structure declaration
+  int arrX[ROWS*COLS];         // Member (int variable)
+  int arrY[ROWS*COLS];   // Member (string variable)
+} PathArr; 
+
+// Directions for moving (up, down, left, right, diagonals)
+int dir[4][2] = {
+  {-1, 0}, {1, 0}, {0, -1}, {0, 1},
+};
+
+// Function to calculate Manhattan distance (heuristic)
+int calculateH(int x, int y, int endCol, int endRow) {
+  return abs(x - endCol) + abs(y - endRow);
+}
+int32_t getTurnAngleInDegrees(){
+  turnSensorUpdate();
+  return (((int32_t)turnAngle >> 16) * 360) >> 16;
+}
+
+// Check if a node is in the closed list
+bool isInClosedList(int x, int y) {
+  for (int i = 0; i < closedListSize; i++) {
+    if (closedList[i]->x == x && closedList[i]->y == y) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool lineDetected() {
+  lineSensors.read(lineSensorValues); // Læser linjesensorværdier
+  // Tjekker om nogen af sensorerne har en værdi over threshold
+
+  if(lineSensorValues[0] > THRESHOLD || lineSensorValues[2] > THRESHOLD){
+    return true;
+  }
+  else 
+  return false;
+}
+
+// Check if a node is in the open list
+int findInOpenList(int x, int y) {
+  for (int i = 0; i < openListSize; i++) {
+    if (openList[i]->x == x && openList[i]->y == y) {
+      return i;
+    }
+  }
+  return -1;
+}
+void turnSensorSetup(){
+  Wire.begin();
+  imu.init();
+  imu.enableDefault();
+  imu.configureForTurnSensing();
+
+  display.clear();
+  display.print(F("Gyro cal"));
+
+  ledYellow(1);
+  delay(500);
+
+  int32_t total = 0;
+  for (uint16_t i = 0; i < 1024; i++)
+  {
+    while(!imu.gyroDataReady()) {}
+    imu.readGyro();
+
+    total += imu.g.z;
+  }
+  ledYellow(0);
+  gyroOffset = total / 1024;
+
+  display.clear();
+  turnSensorReset();
+  while (!buttonA.getSingleDebouncedRelease())
+  {
+    turnSensorUpdate();
+    display.gotoXY(0, 0);
+    display.print(((((int32_t)turnAngle >> 16) * 360) >> 16)+180);
+    display.print(F("   "));
+  }
+  display.clear();
+}
+
+void turnSensorReset()
+{
+  gyroLastUpdate = micros();
+  turnAngle = 180;
+}
+
+void turnSensorUpdate()
+{
+  imu.readGyro();
+  turnRate = imu.g.z - gyroOffset;
+
+  uint16_t m = micros();
+  uint16_t dt = m - gyroLastUpdate;
+  gyroLastUpdate = m;
+
+  int32_t d = (int32_t)turnRate * dt;
+
+  turnAngle += (int64_t)d * 14680064 / 17578125;
+}
+
+// Add a node to the open list
+void addToOpenList(Node* node) {
+  openList[openListSize++] = node;
+}
+
+// Remove a node from the open list
+void removeFromOpenList(int index) {
+  for (int i = index; i < openListSize - 1; i++) {
+    openList[i] = openList[i + 1];
+  }
+  openListSize--;
+}
+
+void pathTranslate(){  
+  
+  
+  for(int i = count-1; i>=1; i-- ){
+
+      if(PathArr.arrX[i] != PathArr.arrX[i-1]){
+        //Serial.println(PathArr.arrX[i]);
+        //Serial.println(PathArr.arrX[i-1]);
+        if(PathArr.arrX[i] > PathArr.arrX[i-1]){
+          howdi += "R";
+        }
+         if(PathArr.arrX[i] < PathArr.arrX[i-1]){
+          howdi += "L";
+        }
+      }
+      if(PathArr.arrY[i] != PathArr.arrY[i-1]){
+        //Serial.println("I Ran too");
+        if(PathArr.arrY[i] > PathArr.arrY[i-1]){
+          howdi += "U";
+        }
+        if(PathArr.arrY[i] < PathArr.arrY[i-1]){
+          howdi += "D";
+        }
+      }
+
+      //Serial.print(PathArr.arrX[i]);
+      //Serial.println(PathArr.arrY[i]);
+     
+     }
+   
+  
+  Serial.println(howdi);
+ 
+}
+
+// A* Algorithm
+void aStar(int startCol, int startRow, int endCol, int endRow) {
+  // Create the start node
+  Node* startNode = new Node{startCol, startRow, 0, calculateH(startCol, startRow, endCol, endRow), 0, nullptr};
+  startNode->f = startNode->g + startNode->h;
+  addToOpenList(startNode);
+
+  while (openListSize > 0) {
+    // Find the node with the lowest F value in the open list
+    int lowestIndex = 0;
+    for (int i = 1; i < openListSize; i++) {
+      if (openList[i]->f < openList[lowestIndex]->f) {
+        lowestIndex = i;
+      }
+    }
+
+    Node* currentNode = openList[lowestIndex];
+    removeFromOpenList(lowestIndex);
+
+    // Add the current node to the closed list
+    closedList[closedListSize++] = currentNode;
+
+    // Check if we reached the goal
+    if (currentNode->x == endCol && currentNode->y == endRow) {
+      // Trace back the path
+      Serial.println("Path found:");
+      Node* pathNode = currentNode;
+      while (pathNode != nullptr) { // THIS ONE
+        
+        PathArr.arrX[count] = pathNode->x;
+        PathArr.arrY[count] = pathNode->y;
+        count++;
+        pathNode = pathNode->parent;
+
+
+
+
+      }
+      return;
+    }
+
+    // Check all neighbors
+    for (int i = 0; i < 8; i++) {
+      int newX = currentNode->x + dir[i][0];
+      int newY = currentNode->y + dir[i][1];
+
+      // Skip invalid or blocked nodes
+      if (newX < 0 || newX >= COLS || newY < 0 || newY >= ROWS || grid[newY][newX] == 1 || isInClosedList(newX, newY)) {
+        continue;
+      }
+
+      int g = currentNode->g + 1;
+      int h = calculateH(newX, newY, endCol, endRow);
+      int f = g + h;
+
+      int openIndex = findInOpenList(newX, newY);
+      if (openIndex != -1) {
+        // Node is in the open list, check if this path is better
+        if (g < openList[openIndex]->g) {
+          openList[openIndex]->g = g;
+          openList[openIndex]->f = f;
+          openList[openIndex]->parent = currentNode;
+        }
+      } else {
+        // Add the neighbor to the open list
+        Node* neighbor = new Node{newX, newY, g, h, f, currentNode};
+        addToOpenList(neighbor);
+      }
+    }
+  }
+
+  Serial.println("No path found.");
+}
+
+
+void driveFunc(){
+  
+  while(lineDetected() == false){
+    lineSensors.read(lineSensorValues);
+    motors.setSpeeds(speed*1.08, speed);
+    
+  }
+  
+  for(int i = 0; i < howdi.length(); i++){
+    delay(400);
+    turnSensorReset();
+    int32_t turnDegrees = getTurnAngleInDegrees() + 180;
+    if(howdi[i] != howdi[i+1]){
+      if(howdi[i] == 'U' && howdi[i+1] == 'L'){
+        delay(50);
+        while(turnDegrees < 270){
+          turnDegrees = getTurnAngleInDegrees() + 180;
+          motors.setSpeeds(-speed, speed);
+        }
+        turnSensorReset();
+        while(lineDetected() == false){
+          lineSensors.read(lineSensorValues);
+          
+          motors.setSpeeds(speed*1.08, speed);
+    
+        }
+        turnSensorReset();
+        continue;
+      }
+      if(howdi[i] == 'U' && howdi[i+1] == 'R'){
+        delay(50);
+        while(turnDegrees > 90){
+          turnDegrees = getTurnAngleInDegrees() + 180;
+          motors.setSpeeds(speed, -speed);
+        }
+        
+        turnSensorReset();
+        while(lineDetected() == false){
+          lineSensors.read(lineSensorValues);
+          
+          motors.setSpeeds(speed, speed);
+
+        }
+        turnSensorReset();
+        continue;
+      }
+      if(howdi[i] == 'D' && howdi[i+1] == 'L'){
+        delay(50);
+        while(turnDegrees > 90){
+          turnDegrees = getTurnAngleInDegrees() + 180;
+          motors.setSpeeds(speed, -speed);
+        }
+        
+         turnSensorReset();
+        while(lineDetected() == false){
+          lineSensors.read(lineSensorValues);
+          
+          motors.setSpeeds(speed*1.08, speed);
+    
+        }
+        turnSensorReset();
+        continue;
+      }
+      if(howdi[i] == 'D' && howdi[i+1] == 'R'){
+        delay(50);
+        while(turnDegrees < 270){
+          turnDegrees = getTurnAngleInDegrees() + 180;
+          motors.setSpeeds(-speed, speed);
+        }
+        
+         turnSensorReset();
+        while(lineDetected() == false){
+          lineSensors.read(lineSensorValues);
+          
+          motors.setSpeeds(speed*1.08, speed);
+    
+        }
+        turnSensorReset();
+        continue;
+      }
+      if(howdi[i] == 'L' && howdi[i+1] == 'D'){
+        delay(50);
+        while(turnDegrees < 270){
+          turnDegrees = getTurnAngleInDegrees() + 180;
+          motors.setSpeeds(-speed, speed);
+        }
+        
+        turnSensorReset();
+        while(lineDetected() == false){
+          lineSensors.read(lineSensorValues);
+          
+          motors.setSpeeds(speed*1.08, speed);
+    
+        }
+        turnSensorReset();
+        continue;
+      }
+      if(howdi[i] == 'L' && howdi[i+1] == 'U'){
+        delay(50);
+        while(turnDegrees > 90){
+          turnDegrees = getTurnAngleInDegrees() + 180;
+          motors.setSpeeds(speed, -speed);
+        }
+        
+         turnSensorReset();
+        while(lineDetected() == false){
+          lineSensors.read(lineSensorValues);
+          
+          motors.setSpeeds(speed*1.08, speed);
+    
+        }
+        turnSensorReset();
+        continue;
+      }
+        if(howdi[i] == 'R' && howdi[i+1] == 'D'){
+        delay(50);
+        while(turnDegrees > 90){
+          turnDegrees = getTurnAngleInDegrees() + 180;
+          motors.setSpeeds(speed, -speed);
+        }
+        
+        turnSensorReset();
+        while(lineDetected() == false){
+          lineSensors.read(lineSensorValues);
+          
+          motors.setSpeeds(speed*1.08, speed);
+    
+        }
+        turnSensorReset();
+        continue;
+      }
+      if(howdi[i] == 'R' && howdi[i+1] == 'U'){
+        delay(50);
+        while(turnDegrees < 270){
+          turnDegrees = getTurnAngleInDegrees() + 180;
+          motors.setSpeeds(-speed, speed);
+        }
+        
+         turnSensorReset();
+        while(lineDetected() == false){
+          lineSensors.read(lineSensorValues);
+          
+          motors.setSpeeds(speed*1.08, speed);
+    
+        }
+        turnSensorReset();
+        continue;
+      }
+
+      
+    }
+    else if(howdi[i] == howdi[i+1]){
+      delay(50);
+      turnSensorReset();
+      while(lineDetected() == false){
+        lineSensors.read(lineSensorValues);
+        
+        motors.setSpeeds(speed*1.08, speed);
+  
+      }
+      turnSensorReset();
+      continue;
+    }
+    
+  }
+  motors.setSpeeds(0, 0);
+}
+
+void finalTurn(){
+  int32_t i = getTurnAngleInDegrees() + 180;
+  i= 180;
+  while(i-1 < 180){
+    i = getTurnAngleInDegrees() + 180;
+    motors.setSpeeds(speed, -speed);
+  }
+  motors.setSpeeds(0, 0);
+
+  
+}
+
+
+void setup() {
+  Serial.begin(9600);
+  lineSensors.initThreeSensors();
+  turnSensorSetup();
+  delay(500);
+  turnSensorReset();
+  display.clear();
+  delay(2000);
+  
+
+  // Run the A* algorithm
+  aStar(startCol, startRow, endCol, endRow);
+  
+  pathTranslate();
+  Serial.println(howdi.length());
+  driveFunc();
+  finalTurn();
+  
+}
+
+void loop() {
+  // Nothing here
+  //lineSensors.read(lineSensorValues);
+  //Serial.println(lineSensorValues[1]);
+  //delay(speed);
+
+
+}
